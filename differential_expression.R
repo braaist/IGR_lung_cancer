@@ -1,219 +1,134 @@
-library("DESeq2")
-library("tidyverse")
-library("tximport")
-library("ggsci")
+library(apeglm)
+library(EnhancedVolcano)
+library(DESeq2)
+library(tidyverse)
+library(tximport)
+library(ggsci)
+library(ggvenn)
 
 setwd("/Users/rusiq/Desktop/IGR/")
+source(paste0(getwd(),"/CustomFunctions.R"))
 
-#Read counts
+#PERFORM DIFFERENTIAL EXPRESSION 
+setwd("/Users/rusiq/Desktop/IGR/")
+#load dataframe with deletion annotations
+deletions_dataframe = read.csv("deletions_combined_dataframe.csv")
+deletions_dataframe$control <- factor(deletions_dataframe$control, levels = c(1, 0), labels = c("Control", "Tumor")) 
+
+#get file names
+files = c()
+for (file in unique(deletions_dataframe$name)){
+  file_names = GetFileNames("/Users/rusiq/Desktop/IGR/files_quant/", file)
+  files = c(files, file_names)
+}
+
+#read trancript_to_gene annotation
 tx2gene <- read.csv("/Users/rusiq/Desktop/IGR/files_quant/salmon_tx2gene.tsv", 
                     sep = "\t", header = 0)
-head(tx2gene)
-
-#EMTAB6957
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/EMTAB6957/"
-files = paste0(PATH, list.files(PATH))
-names(files) = as.character(map(strsplit(list.files(PATH), "_"),1))
-
-#SRP162843
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/SRP162843/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-#ERP001058
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/ERP001058/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-#SRP074349
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/SRP074349/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-#SRP090460
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/SRP090460/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-#SRP313282
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/SRP313282/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-#SRP045225
-PATH = "/Users/rusiq/Desktop/IGR/files_quant/SRP045225/"
-files2 = paste0(PATH, list.files(PATH))
-names(files2) = as.character(map(strsplit(list.files(PATH), "_"),1))
-files = c(files, files2)
-
-length(files)
-
-#KEEP ONLY DELETIONS AND CONTROLS
-deletions_dataframe = read.csv("deletions_combined_dataframe.csv")
-
-files = files[names(files) %in% deletions_dataframe$sample]
-
-txi <- tximport(files, type = "salmon", tx2gene = tx2gene)
-names(txi)
 
 
-coldata = deletions_dataframe[,c("X", "control", "name","binary_3p","binary_9p", "binary_17p","class")]
-rownames(coldata) = as.character(map(strsplit(coldata$X, "\\."), 2))
+#Get only unique deletions
+deletions_17p_only = deletions_dataframe[deletions_dataframe["binary_3p"] == 0 & deletions_dataframe["binary_9p"] == 0 & deletions_dataframe["binary_17p"] == -1,]
+deletions_3p_only = deletions_dataframe[deletions_dataframe["binary_3p"] == -1 & deletions_dataframe["binary_9p"] == 0 & deletions_dataframe["binary_17p"] == 0,]
+deletions_9p_only = deletions_dataframe[deletions_dataframe["binary_3p"] == 0 & deletions_dataframe["binary_9p"] == -1 & deletions_dataframe["binary_17p"] == 0,]
 
-#Reorder columns
-txi$counts = txi$counts[,order(colnames(txi$counts))]
-coldata = coldata[order(rownames(coldata)),]
+#Get only controls 
+controls_only = deletions_dataframe[deletions_dataframe["control"] == "Control" & deletions_dataframe["binary_3p"] == 0 & deletions_dataframe["binary_9p"] == 0 & deletions_dataframe["binary_17p"] == 0,]
 
-#ALL SAMPLES VS ALL CONTROLS
-coldata$control = factor(coldata$control)
-coldata$name = factor(coldata$name)
-dds <- DESeqDataSetFromTximport(txi, coldata, ~name + control)
-dds <- DESeq(dds)
-res <- results(dds)
-res <- na.omit(res)
+#Write deletion files
+write.csv(deletions_3p_only, "deletions_3p_only_samples.csv")
+write.csv(deletions_9p_only, "deletions_9p_only_samples.csv")
+write.csv(deletions_17p_only, "deletions_17p_only_samples.csv")
+write.csv(controls_only, "controls_only_samples.csv")
 
-coldata$name
+#Join deletions with controls for DESeq
+deletions_3p_only = rbind(deletions_3p_only, controls_only)
+deletions_9p_only = rbind(deletions_9p_only, controls_only)
+deletions_17p_only = rbind(deletions_17p_only, controls_only)
 
-#PCA
-dds_norm <- vst(dds)
 
-plot <- plotPCA(
-  dds_norm,
-  intgroup = "control"
+#get file paths for tximport
+files_17p = files[names(files) %in% deletions_17p_only$sample]
+files_3p = files[names(files) %in% deletions_3p_only$sample]
+files_9p = files[names(files) %in% deletions_9p_only$sample]
+
+#Import 3p, 9p and 17p files
+txi_17p = TximportWrapper(files = files_17p, tx2gene = tx2gene)
+txi_9p = TximportWrapper(files = files_9p, tx2gene = tx2gene)
+txi_3p = TximportWrapper(files = files_3p, tx2gene = tx2gene)
+
+#Check whether order is normal
+deletions_17p_only = deletions_17p_only[order(deletions_17p_only$sample),]
+colnames(txi_17p$counts) == deletions_17p_only$sample
+deletions_9p_only = deletions_9p_only[order(deletions_9p_only$sample),]
+colnames(txi_9p$counts) == deletions_9p_only$sample
+deletions_3p_only = deletions_3p_only[order(deletions_3p_only$sample),]
+colnames(txi_3p$counts) == deletions_3p_only$sample
+
+#Get DESeq results
+txi_17p_dds <- DESeqWrapper(txi_17p, deletions_17p_only, counts_QC_treshold = 10, rowsums_QC_treshold = 50)
+txi_9p_dds <- DESeqWrapper(txi_9p, deletions_9p_only, counts_QC_treshold = 10, rowsums_QC_treshold = 50)
+txi_3p_dds <- DESeqWrapper(txi_3p, deletions_3p_only, counts_QC_treshold = 10, rowsums_QC_treshold = 50)
+
+#Clean garbage
+rm(txi_3p, txi_9p, txi_17p)
+gc()
+
+#Save initial objects
+saveRDS(txi_17p_dds, "txi_17p_dds.Rds")
+saveRDS(txi_9p_dds, "txi_9p_dds.Rds")
+saveRDS(txi_3p_dds, "txi_3p_dds.Rds")
+
+#txi_17p_dds = readRDS("txi_17p_dds.Rds")
+#txi_9p_dds = readRDS("txi_9p_dds.Rds")
+#txi_3p_dds = readRDS("txi_3p_dds.Rds")
+
+#Get the dataframe for gene names conversion
+tx2gene <- read.csv("/Users/rusiq/Desktop/IGR/files_quant/salmon_tx2gene.tsv", 
+                    sep = "\t", header = 0)
+colnames(tx2gene) <- c("transcript", "gene_id", "gene_name")
+
+tx2gene <- tx2gene[!duplicated(tx2gene$gene_id), ]
+rownames(tx2gene) <- tx2gene$gene_id
+
+#Not filter DESeq results
+padj_threshold = 1
+LFC_threshold = 0
+txi_17p_initial <- DESeqResultProcessor(txi_17p_dds, padj_threshold, LFC_threshold, tx2gene)
+txi_9p_initial <- DESeqResultProcessor(txi_9p_dds, padj_threshold, LFC_threshold, tx2gene)
+txi_3p_initial <- DESeqResultProcessor(txi_3p_dds, padj_threshold, LFC_threshold, tx2gene)
+
+#Filter deseq results
+padj_threshold = 0.05
+LFC_threshold = 2
+txi_17p_filtered <- DESeqResultProcessor(txi_17p_dds, padj_threshold, LFC_threshold, tx2gene)
+txi_9p_filtered <- DESeqResultProcessor(txi_9p_dds, padj_threshold, LFC_threshold, tx2gene)
+txi_3p_filtered <- DESeqResultProcessor(txi_3p_dds, padj_threshold, LFC_threshold, tx2gene)
+
+rm(txi_3p_dds, txi_9p_dds, txi_17p_dds)
+gc()
+
+#write initial datasets
+write.csv(txi_17p_initial, "/Users/rusiq/Desktop/IGR/txi_17p_res_output_initial.csv")
+write.csv(txi_9p_initial, "/Users/rusiq/Desktop/IGR/txi_9p_res_output_initial.csv")
+write.csv(txi_3p_initial, "/Users/rusiq/Desktop/IGR/txi_3p_res_output_initial.csv")
+
+write.csv(txi_17p_filtered, "/Users/rusiq/Desktop/IGR/txi_17p_res_output_filtered.csv")
+write.csv(txi_9p_filtered, "/Users/rusiq/Desktop/IGR/txi_9p_res_output_filtered.csv")
+write.csv(txi_3p_filtered, "/Users/rusiq/Desktop/IGR/txi_3p_res_output_filtered.csv")
+
+#Venn diagram
+txi_3p_res <- read.csv("/Users/rusiq/Desktop/IGR/txi_3p_res_output_filtered.csv")
+txi_9p_res <- read.csv("/Users/rusiq/Desktop/IGR/txi_9p_res_output_filtered.csv")
+txi_17p_res <- read.csv("/Users/rusiq/Desktop/IGR/txi_17p_res_output_filtered.csv")
+
+gene_lists <- list(del3p = txi_3p_res$gene_name, del17p = txi_17p_res$gene_name, del9p = txi_9p_res$gene_name)
+
+ggvenn(
+  gene_lists, 
+  fill_color = c("#0073C2FF", "#EFC000FF", "#CD534CFF"),
+  stroke_size = 0.5, set_name_size = 4
 )
-plot + theme_bw() + ggtitle("Included samples PCA plot") + scale_color_npg()
-
-plot <- plotPCA(
-  dds_norm,
-  intgroup = "class"
-)
-plot + theme_bw() + ggtitle("Included samples PCA plot") + scale_color_npg()
-
-saveRDS(dds, "all_samples_dds.rds")
-
-
-#OTHER COMPONENTS
-
-#DEL 3p VS ALL
-coldata$binary_3p = factor(coldata$binary_3p)
-coldata$name = factor(coldata$name)
-dds <- DESeqDataSetFromTximport(txi, coldata, ~name + binary_3p)
-dds <- DESeq(dds)
-res <- results(dds)
-res <- na.omit(res)
-
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_3p_vs_all.csv")
-
-#DEL 9p VS ALL
-coldata$binary_9p = factor(coldata$binary_9p)
-coldata$name = factor(coldata$name)
-dds <- DESeqDataSetFromTximport(txi, coldata, ~name + binary_9p)
-dds <- DESeq(dds)
-res <- results(dds)
-res <- na.omit(res)
-
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_9p_vs_all.csv")
-
-#DEL 17p VS ALL
-coldata$binary_17p = factor(coldata$binary_17p)
-coldata$name = factor(coldata$name)
-dds <- DESeqDataSetFromTximport(txi, coldata, ~name + binary_17p)
-dds <- DESeq(dds)
-res <- results(dds)
-res <- na.omit(res)
-
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_17p_vs_all.csv")
-
-#SUBSET ONLY PAIRED COMPARISONS
-dds <- DESeqDataSetFromTximport(txi, coldata, ~name + control)
-## subset the coldata
-control_samples = colData(dds)[colData(dds)$control == 1,]
-
-coldata_3p_only = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == -1 & colData(dds)$binary_9p == 0 & colData(dds)$binary_17p == 0),]
-coldata_3p_only = rbind(coldata_3p_only, control_samples)
-coldata_9p_only = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == 0 & colData(dds)$binary_9p == -1 & colData(dds)$binary_17p == 0),]
-coldata_9p_only = rbind(coldata_9p_only, control_samples)
-coldata_17p_only = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == 0 & colData(dds)$binary_9p == 0 & colData(dds)$binary_17p == -1),]
-coldata_17p_only = rbind(coldata_17p_only, control_samples)
-coldata_3p_17p = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == -1 & colData(dds)$binary_9p == 0 & colData(dds)$binary_17p == -1),]
-coldata_3p_17p = rbind(coldata_3p_17p, control_samples)
-coldata_3p_9p = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == -1 & colData(dds)$binary_9p == -1 & colData(dds)$binary_17p == 0),]
-coldata_3p_9p = rbind(coldata_3p_9p, control_samples)
-coldata_17p_9p = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == 0 & colData(dds)$binary_9p == -1 & colData(dds)$binary_17p == -1),]
-coldata_17p_9p = rbind(coldata_17p_9p, control_samples)
-coldata_all = colData(dds)[(colData(dds)$control == 0 & colData(dds)$binary_3p == -1 & colData(dds)$binary_9p == -1 & colData(dds)$binary_17p == -1),]
-coldata_all = rbind(coldata_all, control_samples)
-
-#3p
-
-colData(dds)
-dds_use <- dds[,coldata_3p_only$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_3p_only.csv")
-
-#9p
-dds_use <- dds[,coldata_9p_only$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_9p_only.csv")
-
-#17p
-dds_use <- dds[,coldata_17p_only$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_17p_only.csv")
-
-#3p and 9p
-dds_use <- dds[,coldata_3p_9p$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_3p_9p_only.csv")
-
-#3p and 17p
-dds_use <- dds[,coldata_3p_17p$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_3p_17p_only.csv")
-
-#9p and 17p
-dds_use <- dds[,coldata_17p_9p$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_9p_17p_only.csv")
-
-#all
-dds_use <- dds[,coldata_all$samples]
-dds_use <- DESeq(dds_use)
-res <- results(dds_use)
-res <- na.omit(res)
-res = merge(data.frame(res), gene_name, by = "row.names", all.x = TRUE)
-write.csv(res, "/Users/rusiq/Desktop/IGR/DEG_all.csv")
-
-
-gene_name = read.csv("/Users/rusiq/Desktop/IGR/EMTAB6957_raw_counts.tsv", sep = "\t")
-gene_name = gene_name[,c("gene_id", "gene_name")]
-rownames(gene_name) = gene_name$gene_id
 
 
 
